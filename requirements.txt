@@ -1,0 +1,14 @@
+# Fallback for pip-only environments.
+# Primary setup: conda env create -f environment.yaml
+#
+# NOTE: llama-cpp-python is NOT listed here.
+# It requires a source build for CUDA 13.0 support.
+# After activating your environment, run:
+#
+#   CMAKE_ARGS="-DGGML_CUDA=on" pip install llama-cpp-python --no-binary llama-cpp-python
+
+PyYAML>=6.0
+numpy>=1.26
+torch>=2.6
+huggingface-hub
+pytest

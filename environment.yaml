@@ -1,0 +1,17 @@
+name: uav-reward-gen
+channels:
+  - conda-forge
+  - defaults
+
+dependencies:
+  - python=3.11
+  - pip
+  - numpy>=1.26
+  - pyyaml>=6.0
+  - pip:
+      - torch>=2.11             # PyPI default wheel is CUDA 13.0 from 2.11+
+      - torchvision
+      - torchaudio
+      - huggingface-hub
+      - pytest
+      # llama-cpp-python is built from source after activation — see README Step 4
