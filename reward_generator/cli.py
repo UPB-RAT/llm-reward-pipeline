@@ -2,17 +2,19 @@ import argparse
 import shutil
 from pathlib import Path
 
-from reward_generator.config import load_config
+from reward_generator.domain_config import load_config
 from reward_generator.llm_client import LocalLLMClient
 from reward_generator.orchestrator import RewardGenerationOrchestrator
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="UAV reward generation pipeline")
-    parser.add_argument("--config",         default="configs/default.yaml")
-    parser.add_argument("--model-path",     required=True)
-    parser.add_argument("--num-candidates", type=int, default=None)
-    parser.add_argument("--task",           dest="task_name", default=None)
+    parser = argparse.ArgumentParser(description="LLM-based reward generation pipeline")
+    parser.add_argument("--config",         default="configs/default.yaml",
+                        help="Path to YAML config (swap this to change domain)")
+    parser.add_argument("--model-path",     required=True,
+                        help="Path to GGUF model weights")
+    parser.add_argument("--num-candidates", type=int, default=None,
+                        help="Override pipeline.num_candidates from config")
     parser.add_argument(
         "--clean",
         action="store_true",
@@ -35,14 +37,18 @@ def main():
     args = parse_args()
     config = load_config(args.config)
 
+    # CLI overrides
     if args.num_candidates is not None:
         config.pipeline.num_candidates = args.num_candidates
-    if args.task_name is not None:
-        config.pipeline.task_name = args.task_name
 
     if args.clean:
         print("\n── Cleaning previous outputs ──")
         clean_outputs()
+
+    print(f"\n── Domain  : {config.domain.name}")
+    print(f"── Config  : {args.config}")
+    print(f"── Model   : {args.model_path}")
+    print(f"── Candidates per run: {config.pipeline.num_candidates}\n")
 
     llm = LocalLLMClient(
         model_path=args.model_path,

@@ -1,74 +1,112 @@
-from validators.code_extractor import extract_code_block
-from validators.ast_validator import static_validate
+import torch
+from validators.code_extractor import extract_code
+from validators.ast_validator import validate_ast
 from validators.runtime_tester import runtime_test
+from reward_generator.domain_config import load_config
+
+
+# Load real domain config so tests reflect actual pipeline settings
+CFG = load_config("configs/default.yaml")
+
 
 SAMPLE = '''```python
 import torch
 
-def compute_reward(uav_pos, uav_vel, uav_ang_vel, uav_quat, goal_pos, prev_dist, crash, episode_len, max_episode_len):
-    dist = torch.norm(goal_pos - uav_pos, dim=-1)
-    progress = prev_dist - dist
-    stability_penalty = 0.05 * torch.norm(uav_ang_vel, dim=-1)
-    time_penalty = 0.001 * episode_len.float() / float(max_episode_len)
-    goal_bonus = (dist < 1.0).float() * 5.0
-    crash_penalty = crash.float() * 10.0
-    reward = progress + goal_bonus - stability_penalty - time_penalty - crash_penalty
-    return reward.float()
+def _get_rewards(self) -> torch.Tensor:
+    lin_vel = torch.sum(torch.square(self.robot.data.root_lin_vel_b), dim=1)
+    ang_vel = torch.sum(torch.square(self.robot.data.root_ang_vel_b), dim=1)
+    distance_to_goal = torch.linalg.norm(
+        self.desired_pos_w - self.robot.data.root_pos_w, dim=1
+    )
+    distance_to_goal_mapped = 1 - torch.tanh(distance_to_goal / 0.8)
+    height_deviation = torch.abs(
+        self.robot.data.root_pos_w[:, 2] - self.desired_pos_w[:, 2]
+    )
+    rewards = {
+        "lin_vel": lin_vel * self.cfg.lin_vel_reward_scale * self.step_dt,
+        "ang_vel": ang_vel * self.cfg.ang_vel_reward_scale * self.step_dt,
+        "distance_to_goal": distance_to_goal_mapped * self.cfg.distance_to_goal_reward_scale * self.step_dt,
+        "height_stability": height_deviation * -1.0 * self.step_dt,
+    }
+    reward = torch.sum(torch.stack(list(rewards.values())), dim=0)
+    return reward
 ```'''
 
 
-def test_extract_validate_runtime():
-    code = extract_code_block(SAMPLE)
+SAMPLE_NO_BLOCK = "Here is some text without a code block."
+
+
+SAMPLE_WRONG_FUNC = '''```python
+def compute_reward(self):
+    return torch.zeros(16)
+```'''
+
+
+SAMPLE_FORBIDDEN = '''```python
+def _get_rewards(self):
+    exec("malicious code")
+    return torch.zeros(16)
+```'''
+
+
+# ── Stage 1: Code Extraction ─────────────────────────────────────────────────
+
+def test_extract_valid_block():
+    code = extract_code(SAMPLE)
     assert code is not None
-    ok_static, _ = static_validate(code)
-    assert ok_static
-    ok_runtime, _, metrics = runtime_test(code)
-    assert ok_runtime
+    assert "_get_rewards" in code
+
+
+def test_extract_no_block():
+    code = extract_code(SAMPLE_NO_BLOCK)
+    assert code is None
+
+
+# ── Stage 2: AST Static Validation ───────────────────────────────────────────
+
+def test_static_validate_pass():
+    code = extract_code(SAMPLE)
+    ok, msg = validate_ast(code)
+    assert ok, f"Expected pass but got: {msg}"
+
+
+def test_static_validate_wrong_function_name():
+    code = extract_code(SAMPLE_WRONG_FUNC)
+    ok, _ = validate_ast(code)
+    assert not ok
+
+
+def test_static_validate_forbidden_call():
+    code = extract_code(SAMPLE_FORBIDDEN)
+    ok, msg = validate_ast(code)
+    assert not ok
+    assert "exec" in msg.lower()
+
+
+# ── Stage 4: Runtime Smoke Test ──────────────────────────────────────────────
+
+def test_runtime_pass():
+    code = extract_code(SAMPLE)
+    ok, msg, metrics = runtime_test(
+        code,
+        batch_size=CFG.runtime_test.batch_size,
+        domain=CFG.domain,
+    )
+    assert ok, f"Expected runtime pass but got: {msg}"
     assert "mean" in metrics
+    assert "std"  in metrics
 
-# ```
 
-# ## Empty package files
-
-# Use these minimal files:
-
-# ```python
-# # prompts/__init__.py
-# # reward_generator/__init__.py
-# # validators/__init__.py
-# # utils/__init__.py
-# # tests/__init__.py
-# ```
-
-# ## Run commands
-
-# Install and test:
-
-# ```bash
-# python -m venv .venv
-# source .venv/bin/activate
-# pip install -r requirements.txt
-# pytest tests/test_pipeline.py
-# ```
-
-# Run generation:
-
-# ```bash
-# python -m reward_generator.cli \
-#   --model-path models/qwen2.5-coder-7b-instruct-q4_k_m.gguf \
-#   --num-candidates 5 \
-#   --task long_range_navigation
-# ```
-
-# ## What this gives you
-
-# This repo gives you a clean common base for Phase 1: a local code model, a UAV reward prompt contract, a static validator, and a runtime smoke test. That is the right foundation before attaching IsaacLab rollout evaluation, because reward generation quality depends heavily on prompt structure and validation discipline.[4][5][1]
-
-# The next logical step is to improve this base with three additions: structured scoring of accepted rewards, templated prompt variants for exploration, and a small benchmark set of hand-written reward examples for regression checks. IsaacLab’s task workflow and IsaacLabEureka make that Phase 2 bridge straightforward once this repo is stable.[2][3]
-
-# Would you like me to produce **Version 2** of this repo with:
-# 1. Dockerfile,
-# 2. `pytest` suite expanded,
-# 3. ranking/scoring module,
-# 4. prompt variants,
-# 5. IsaacLab integration stubs for Phase 2?
+def test_runtime_wrong_shape():
+    bad_code = '''
+def _get_rewards(self) -> torch.Tensor:
+    import torch
+    return torch.zeros(1)   # wrong shape — not (N,)
+'''
+    ok, msg, _ = runtime_test(
+        bad_code,
+        batch_size=CFG.runtime_test.batch_size,
+        domain=CFG.domain,
+    )
+    assert not ok
+    assert "shape" in msg.lower()

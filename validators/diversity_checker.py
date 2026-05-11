@@ -1,48 +1,28 @@
 import ast
+import pathlib
 
-# Component names present in the baseline IsaacLab reference reward
-REFERENCE_COMPONENTS = {
-    "lin_vel",
-    "ang_vel",
-    "distance_to_goal",
-    "distance_to_goal_mapped",
-}
-
-# Minimum number of NEW variable names beyond the reference
-NOVELTY_REQUIRED = 2
+MIN_NOVEL = 2   # minimum new variables beyond reference baseline
 
 
-def diversity_check(code: str) -> tuple[bool, str]:
+def _get_variable_names(code: str) -> set[str]:
     try:
         tree = ast.parse(code)
     except SyntaxError:
-        # Syntax errors are handled by the AST validator — skip here
-        return True, "skip — syntax error handled by ast_validator"
+        return set()
+    return {n.id for n in ast.walk(tree) if isinstance(n, ast.Name)}
 
-    # Collect all assigned variable names in the function body
-    assigned_names = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Assign):
-            for target in node.targets:
-                if isinstance(target, ast.Name):
-                    assigned_names.add(target.id)
-        elif isinstance(node, (ast.AnnAssign,)):
-            if isinstance(node.target, ast.Name):
-                assigned_names.add(node.target.id)
 
-    # Filter out noise: single-letter names, 'reward', 'rewards', 'self'
-    noise = {"reward", "rewards", "self", "key", "value", "i", "n"}
-    assigned_names -= noise
+def _load_reference_names(env_reference_path: str) -> set[str]:
+    ref_code = pathlib.Path(env_reference_path).read_text()
+    return _get_variable_names(ref_code)
 
-    # Count names that are NOT in the reference
-    novel_names = assigned_names - REFERENCE_COMPONENTS
-    novel_count = len(novel_names)
 
-    if novel_count < NOVELTY_REQUIRED:
-        return (
-            False,
-            f"Too similar to reference — only {novel_count} novel variable(s) found: "
-            f"{novel_names}. Need at least {NOVELTY_REQUIRED}.",
-        )
-
-    return True, f"Diverse — {novel_count} novel component(s): {novel_names}"
+def diversity_check(code: str, domain) -> tuple[bool, str]:
+    reference_names = _load_reference_names(domain.env_reference_path)
+    candidate_names = _get_variable_names(code)
+    novel = candidate_names - reference_names
+    # filter out short/generic names
+    novel = {n for n in novel if len(n) > 3 and not n.startswith("_")}
+    if len(novel) < MIN_NOVEL:
+        return False, f"Too similar: only {len(novel)} novel components ({novel})"
+    return True, f"Diverse: {len(novel)} novel components {novel}"

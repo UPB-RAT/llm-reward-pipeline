@@ -1,6 +1,6 @@
 from reward_generator.prompt_builder import build_messages
-from validators.code_extractor import extract_code_block
-from validators.ast_validator import static_validate
+from validators.code_extractor import extract_code
+from validators.ast_validator import validate_ast
 from validators.diversity_checker import diversity_check
 from validators.runtime_tester import runtime_test
 from reward_generator.reward_store import RewardStore
@@ -11,22 +11,22 @@ class RewardGenerationOrchestrator:
     def __init__(self, llm_client, config):
         self.llm = llm_client
         self.config = config
-        self.store = RewardStore("outputs/rewards", "outputs/logs")
+        self.store = RewardStore(
+            f"outputs/rewards/{config.domain.name}",
+            f"outputs/logs/{config.domain.name}",
+        )
 
     def run(self):
         accepted = []
-        all_results = []  # tracks ALL candidates — accepted AND rejected
+        all_results = []
 
         for idx in range(self.config.pipeline.num_candidates):
 
-            # --- Build prompt using ALL prior results (accepted + rejected) ---
             messages = build_messages(
-                task_name=self.config.pipeline.task_name,
+                domain=self.config.domain,
                 prior_results=all_results,
             )
 
-            # --- LLM inference ---
-            # Vary temperature per candidate for structural diversity
             temperatures = getattr(self.config.pipeline, "temperatures", None)
             temperature = (
                 temperatures[idx % len(temperatures)]
@@ -48,11 +48,12 @@ class RewardGenerationOrchestrator:
             }
 
             # ── STAGE 1: Code Extraction ──────────────────────────────────
-            code = extract_code_block(raw_output)
-            if code is None:
+            code, ok_extract, msg_extract = extract_code(raw_output)
+            if not ok_extract:
                 record["status"] = "rejected"
                 record["reason"] = "no_code_block"
                 record["stage"] = "code_extractor"
+                record["message"] = msg_extract
                 self.store.save_candidate(
                     f"rejected_{timestamp()}_{idx}", "# no code extracted\n", record
                 )
@@ -62,7 +63,7 @@ class RewardGenerationOrchestrator:
             record["code"] = code
 
             # ── STAGE 2: AST Static Validation ───────────────────────────
-            ok_static, msg_static = static_validate(code)
+            ok_static, msg_static = validate_ast(code)
             record["static_validation"] = {"ok": ok_static, "message": msg_static}
             if not ok_static:
                 record["status"] = "rejected"
@@ -75,7 +76,7 @@ class RewardGenerationOrchestrator:
                 continue
 
             # ── STAGE 3: Diversity Check ──────────────────────────────────
-            ok_diverse, msg_diverse = diversity_check(code)
+            ok_diverse, msg_diverse = diversity_check(code, self.config.domain)
             record["diversity_check"] = {"ok": ok_diverse, "message": msg_diverse}
             if not ok_diverse:
                 record["status"] = "rejected"
@@ -91,6 +92,7 @@ class RewardGenerationOrchestrator:
             ok_runtime, msg_runtime, metrics = runtime_test(
                 code,
                 batch_size=self.config.runtime_test.batch_size,
+                domain=self.config.domain,
             )
             record["runtime_test"] = {
                 "ok": ok_runtime,
