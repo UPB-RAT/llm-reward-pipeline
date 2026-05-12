@@ -1,187 +1,144 @@
-import pathlib
-import importlib
-
-
-# Generic fallback SYSTEM_PROMPT — used when no domain-specific prompt file exists
-DEFAULT_SYSTEM_PROMPT = """You are an expert reinforcement learning engineer.
-Generate a Python method `_get_rewards(self) -> torch.Tensor` for an
-IsaacLab DirectRLEnv subclass.
-
-STRICT RULES:
-- Function name must be exactly `_get_rewards`
-- Only import/use torch (no numpy, no scipy, no custom modules)
-- No forbidden calls: eval, exec, open, subprocess, os
-- Output must be shape (N,) float32 tensor, no NaN, no Inf
-- Use only self.robot.data.* attributes and self.cfg.* scales
-- Return a single scalar reward per environment instance
 """
+reward_generator/prompt_builder.py  — full replacement
+Injects domain config values (batch_size, step_dt, tensor shapes) dynamically
+so prompts/quadcopter.py never hardcodes any numbers.
+"""
+import importlib
+from pathlib import Path
 
 
-def _load_domain_prompts(domain) -> tuple[str, str | None]:
-    """
-    Try to load SYSTEM_PROMPT and USER_TEMPLATE from prompts/<domain.name>.py.
-    Falls back to DEFAULT_SYSTEM_PROMPT + YAML task_description if not found.
-    """
+def build_messages(domain, prior_results: list = None, failure_patch: str = "") -> list[dict]:
+    # ── Load domain prompt module ─────────────────────────────────────────────
     try:
         mod = importlib.import_module(f"prompts.{domain.name}")
-        system_prompt = getattr(mod, "SYSTEM_PROMPT", DEFAULT_SYSTEM_PROMPT)
-        user_template = getattr(mod, "USER_TEMPLATE", None)
-        return system_prompt, user_template
+        system_prompt    = mod.SYSTEM_PROMPT
+        tensor_reference = getattr(mod, "TENSOR_REFERENCE", "")
+        few_shot         = getattr(mod, "FEW_SHOT_EXAMPLE", "")
+        user_template    = mod.USER_TEMPLATE
     except ModuleNotFoundError:
-        return DEFAULT_SYSTEM_PROMPT, None
+        system_prompt    = "You are an expert robotics reward function engineer."
+        tensor_reference = ""
+        few_shot         = ""
+        user_template    = (
+            "Write a reward function for: {task_description}\n"
+            "Baseline:\n```python\n{baseline_code}\n```\n"
+            "{prior_results}\nOutput only a ```python ... ``` block."
+        )
 
+    # ── Load baseline code ────────────────────────────────────────────────────
+    baseline_code = Path(domain.env_reference_path).read_text()
 
-def build_messages(domain, prior_results: list = None) -> list[dict]:
-    prior_results = prior_results or []
+    # ── Build dynamic tensor reference from YAML tensor_shapes ───────────────
+    dynamic_tensor_ref = _build_tensor_reference(domain)
 
-    system_prompt, user_template = _load_domain_prompts(domain)
+    # ── Build dynamic constraints block from YAML ─────────────────────────────
+    dynamic_constraints = _build_constraints(domain)
 
-    if user_template is not None:
-        # Use the rich domain-specific USER_TEMPLATE (e.g. prompts/uav_navigation.py)
-        user_content = user_template
-    else:
-        # Generic fallback — build from YAML task_description + reference env
-        ref_code = pathlib.Path(domain.env_reference_path).read_text()
-        user_content = f"""TASK DESCRIPTION:
-{domain.task_description.strip()}
+    # ── Format prior results ──────────────────────────────────────────────────
+    prior_str = _format_prior_results(prior_results or [])
 
-REFERENCE ENVIRONMENT (baseline — you MUST go beyond this):
-```python
-{ref_code}
-```
-"""
+    # ── Pick variant ──────────────────────────────────────────────────────────
+    n = len(prior_results) if prior_results else 0
+    variant = ["from_scratch", "refine", "physics_guided"][n % 3]
 
-    feedback_block = _build_feedback_block(prior_results)
-    if feedback_block:
-        user_content += f"\n\n{feedback_block}"
+    # ── Inject failure_patch into system prompt ───────────────────────────────
+    full_system = system_prompt + "\n" + dynamic_constraints
+    if failure_patch:
+        full_system += "\n" + failure_patch
 
-    user_content += "\nGenerate ONLY a Python code block with the `_get_rewards` method."
+    # ── Fill user template ────────────────────────────────────────────────────
+    user_content = user_template.format(
+        tensor_reference = dynamic_tensor_ref,   # from YAML, not hardcoded
+        few_shot         = few_shot,
+        baseline_code    = baseline_code,
+        prior_results    = prior_str,
+        variant          = variant,
+        task_description = getattr(domain, "task_description", ""),
+    )
 
     return [
-        {"role": "system", "content": system_prompt},
+        {"role": "system", "content": full_system},
         {"role": "user",   "content": user_content},
     ]
 
 
-def _build_feedback_block(prior_results: list) -> str:
-    if not prior_results:
-        return ""
+def _build_tensor_reference(domain) -> str:
+    """Build the ALLOWED TENSORS block dynamically from domain.tensor_shapes."""
+    tensor_shapes = getattr(domain, "tensor_shapes", {})
+    cfg_scales    = getattr(domain, "cfg_scales", {})
+    step_dt       = getattr(domain, "step_dt", 0.02)
 
-    accepted = [r for r in prior_results if r.get("status") == "accepted"]
-    rejected = [r for r in prior_results if r.get("status") == "rejected"]
-    iteration = len(prior_results)
+    # Infer batch size from first tensor shape
+    batch_size = 16
+    for shape in tensor_shapes.values():
+        if isinstance(shape, list) and len(shape) >= 1:
+            batch_size = shape[0]
+            break
 
-    lines = ["=" * 60, "FEEDBACK FROM PREVIOUS CANDIDATES", "=" * 60]
+    lines = [f"ALLOWED TENSORS (batch_size = N = {batch_size}):"]
+    for name, shape in tensor_shapes.items():
+        shape_str = f"[{', '.join(str(s) for s in shape)}]"
+        lines.append(f"  self.{name:<45} shape {shape_str}")
 
-    # ── Best accepted reward so far ──────────────────────────────
-    if accepted:
-        best = accepted[-1]
-        metrics = best.get("runtime_test", {}).get("metrics", {})
-        lines += [
-            "",
-            ">>> BEST ACCEPTED REWARD SO FAR <<<",
-            "Build on this — keep what works, improve what doesn't.",
-            "",
-            best.get("code", "# (no code available)"),
-            "",
-            f"Runtime metrics: mean={metrics.get('mean', 'N/A'):.4f}  "
-            f"std={metrics.get('std', 'N/A'):.4f}  "
-            f"min={metrics.get('min', 'N/A'):.4f}  "
-            f"max={metrics.get('max', 'N/A'):.4f}",
-        ]
-    else:
-        lines += [
-            "",
-            ">>> NO ACCEPTED REWARD YET <<<",
-            "No candidate has passed all checks. Try a different structure.",
-        ]
+    lines.append("")
+    lines.append("ALLOWED CFG SCALES (float scalars — multiply by self.step_dt):")
+    for scale_name in cfg_scales:
+        lines.append(f"  self.cfg.{scale_name}")
 
-    # ── Rejection signals ────────────────────────────────────────
-    if rejected:
-        recent_rejections = rejected[-3:]
-        lines += ["", ">>> RECENT FAILURES — DO NOT REPEAT THESE MISTAKES <<<"]
-        for r in recent_rejections:
-            reason  = r.get("reason", "unknown")
-            stage   = r.get("stage", "unknown")
-            message = _extract_message(r)
-            lines += [
-                "",
-                f"  Rejection stage  : {stage}",
-                f"  Rejection reason : {reason}",
-                f"  Validator message: {message}",
-            ]
-            code = r.get("code")
-            if code and reason != "no_code_block":
-                snippet = "\n".join(code.splitlines()[:10])
-                lines += ["  Failing code snippet (first 10 lines):", "  ---", snippet, "  ---"]
+    lines.append("")
+    lines.append(f"SCALAR:  self.step_dt = {step_dt}")
+    lines.append("")
+    lines.append("NOTHING ELSE EXISTS. No self.num_envs, obs_dict, cfg[\"...\"], device.")
 
-    # ── Improvement directive ────────────────────────────────────
-    directive = _build_improvement_directive(accepted, rejected, iteration)
-    lines += ["", ">>> IMPROVEMENT DIRECTIVE FOR THIS ITERATION <<<", directive]
-    lines += ["", "=" * 60, ""]
     return "\n".join(lines)
 
 
-def _build_improvement_directive(accepted: list, rejected: list, iteration: int) -> str:
-    directives = []
+def _build_constraints(domain) -> str:
+    """Build a CONSTRAINTS block appended to SYSTEM_PROMPT from YAML values."""
+    tensor_shapes = getattr(domain, "tensor_shapes", {})
+    cfg_scales    = getattr(domain, "cfg_scales", {})
+    step_dt       = getattr(domain, "step_dt", 0.02)
 
-    if accepted:
-        metrics = accepted[-1].get("runtime_test", {}).get("metrics", {})
-        mean = metrics.get("mean")
-        std  = metrics.get("std")
-        if mean is not None:
-            if mean < 0.05:
-                directives.append(
-                    f"Reward mean is very low ({mean:.3f}). Increase the "
-                    f"distance_to_goal scale or add a progress bonus."
-                )
-            elif mean > 0.8:
-                directives.append(
-                    f"Reward mean is very high ({mean:.3f}). Consider adding "
-                    f"a penalty term or reducing scale constants."
-                )
-        if std is not None and std > 0.4:
-            directives.append(
-                f"Reward std is high ({std:.3f}). Consider clamping components "
-                f"or normalizing scales."
-            )
+    batch_size = 16
+    for shape in tensor_shapes.values():
+        if isinstance(shape, list) and len(shape) >= 1:
+            batch_size = shape[0]
+            break
 
-    iteration_goals = {
-        0: "Produce a valid reward that passes all shape and validation checks.",
-        1: "Improve reward density — every step should give a non-zero signal.",
-        2: "Add a crash/out-of-bounds penalty: penalize Z < 0.1 or Z > 2.0.",
-        3: "Add a progress bonus: reward the agent more when actively moving toward goal.",
-        4: "Try potential-based shaping: reward = potential(current) - potential(next).",
-    }
-    directives.append(
-        f"This iteration's goal: {iteration_goals.get(iteration, 'Improve reward quality and diversity.')}"
+    allowed_attrs = (
+        [f"self.{n}" for n in tensor_shapes]
+        + [f"self.cfg.{s}" for s in cfg_scales]
+        + ["self.step_dt"]
     )
 
-    if len(accepted) >= 2:
-        directives.append(
-            "IMPORTANT: Recent accepted rewards share similar structure. "
-            "Try a meaningfully different approach."
-        )
+    lines = [
+        "\nDOMAIN CONSTRAINTS (auto-generated from config):",
+        f"  batch_size = {batch_size}  (return tensor must be shape [{batch_size}])",
+        f"  step_dt    = {step_dt}",
+        f"  Allowed attributes ({len(allowed_attrs)} total):",
+    ]
+    for attr in allowed_attrs:
+        lines.append(f"    {attr}")
 
-    if rejected:
-        reasons = [r.get("reason") for r in rejected[-3:]]
-        if reasons.count("runtime_test_failed") >= 2:
-            directives.append(
-                "WARNING: Multiple runtime failures. "
-                "Ensure every component has shape (N,) before returning."
-            )
-        if reasons.count("too_similar_to_reference") >= 2:
-            directives.append(
-                "WARNING: Diversity check keeps failing. "
-                "Introduce at least 3 new variable names not in the reference."
-            )
-
-    return "\n".join(f"- {d}" for d in directives)
+    return "\n".join(lines)
 
 
-def _extract_message(record: dict) -> str:
-    for key in ("runtime_test", "static_validation", "diversity_check"):
-        block = record.get(key, {})
-        if isinstance(block, dict) and block.get("message"):
-            return block["message"]
-    return "no message available"
+def _format_prior_results(results: list[dict]) -> str:
+    if not results:
+        return ""
+    lines = ["\nPREVIOUS ATTEMPTS THIS RUN:"]
+    for r in results[-4:]:
+        idx    = r.get("candidate_index", "?")
+        status = r.get("status", "?")
+        reason = r.get("reason", "")
+        if status == "accepted":
+            lines.append(f"  ✓ Candidate {idx}: ACCEPTED")
+            code_preview = "\n".join((r.get("code") or "").splitlines()[:6])
+            if code_preview:
+                lines.append(f"```python\n{code_preview}\n```")
+        else:
+            rt_msg = r.get("runtime_test", {}).get("message", "")
+            lines.append(f"  ✗ Candidate {idx}: REJECTED — {reason}")
+            if rt_msg:
+                lines.append(f"    Error: {rt_msg}")
+    return "\n".join(lines) + "\n"

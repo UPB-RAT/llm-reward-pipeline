@@ -1,0 +1,42 @@
+# ─────────────────────────────────────────────────────────────
+#  Quadcopter hover / navigation domain
+#  RTX Ada4000 12GB VRAM  →  Qwen2.5-Coder-7B-Instruct Q4_K_M
+# ─────────────────────────────────────────────────────────────
+
+model:
+  temperature: 0.8
+  top_p: 0.95
+  max_tokens: 2048
+  n_ctx: 8192
+  n_gpu_layers: -1                             # fits Qwen2.5-7B Q4_K_M in 12GB
+
+pipeline:
+  num_candidates: 5
+  task_name: quadcopter                        # used for output folder naming
+  save_all_raw: false
+  random_seed: 42
+
+runtime_test:
+  batch_size: 16
+  max_episode_len: 500
+
+domain:
+  name: "quadcopter"                           # must match prompts/quadcopter.py
+  task_description: |
+    Quadcopter hover and navigation task using IsaacLab DirectRLEnv.
+    The robot must fly to a 3D target position while minimising
+    oscillations and maintaining stable flight.
+    Available state: root_lin_vel_b, root_ang_vel_b,
+                     root_pos_w, projected_gravity_b, desired_pos_w
+  env_reference_path: "envs/quadcopter_env_reference.py"
+  step_dt: 0.02
+  cfg_scales:
+    lin_vel_reward_scale:          -0.05
+    ang_vel_reward_scale:          -0.05
+    distance_to_goal_reward_scale:  1.50
+  tensor_shapes:
+    "robot.data.root_lin_vel_b":      [16, 3]
+    "robot.data.root_ang_vel_b":      [16, 3]
+    "robot.data.root_pos_w":          [16, 3]
+    "robot.data.projected_gravity_b": [16, 3]
+    "desired_pos_w":                  [16, 3]
