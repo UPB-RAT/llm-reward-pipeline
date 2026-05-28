@@ -32,7 +32,8 @@ def extract_code(raw_output: str) -> str | None:
             return code
 
     # 3. Bare function — everything from 'def _get_rewards' to end
-    match = re.search(r"(def _get_rewards\(.*)", raw_output, re.DOTALL)
+    # match = re.search(r"(def _get_rewards\(.*)", raw_output, re.DOTALL)
+    match = re.search(r"(def compute_rewards\(.*)", raw_output, re.DOTALL)
     if match:
         return match.group(1).strip()
 

@@ -1,0 +1,40 @@
+# ─────────────────────────────────────────────────────────────
+#  Cartpole balance domain
+#  RTX Ada4000 12GB VRAM  →  Qwen2.5-Coder-7B-Instruct Q4_K_M
+# ─────────────────────────────────────────────────────────────
+
+model:
+  temperature: 0.8
+  top_p: 0.95
+  max_tokens: 2048
+  n_ctx: 8192
+  n_gpu_layers: -1
+
+pipeline:
+  num_candidates: 5
+  task_name: cartpole
+  save_all_raw: false
+  random_seed: 42
+
+runtime_test:
+  batch_size: 16
+  max_episode_len: 200
+
+domain:
+  name: "cartpole"
+  task_description: |
+    Balance pole upright.
+    Available state: pole_pos, pole_vel, cart_pos, cart_vel
+  env_reference_path: "envs/cartpole.py"
+  step_dt: 0.02
+  cfg_scales:
+    rew_scale_alive:      1.0       # ← real floats, no trailing comma
+    rew_scale_terminated: -2.0
+    rew_scale_pole_pos:   -1.0
+    rew_scale_cart_vel:   -0.01
+    rew_scale_pole_vel:   -0.005
+  tensor_shapes:
+    "pole_pos": [16]                # ← 1-D: joint_pos[:, pole_dof_idx]
+    "pole_vel": [16]
+    "cart_pos": [16]
+    "cart_vel": [16]

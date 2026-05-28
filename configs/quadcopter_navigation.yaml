@@ -1,0 +1,42 @@
+# ─────────────────────────────────────────────────────────────
+#  Quadcopter agile sequential navigation domain
+#  RTX Ada4000 12GB VRAM  →  Qwen2.5-Coder-7B-Instruct Q4_K_M
+# ─────────────────────────────────────────────────────────────
+
+model:
+  temperature: 0.1                             # Lowered from 0.8 for stricter, deterministic code generation
+  top_p: 0.95
+  max_tokens: 2048
+  n_ctx: 8192
+  n_gpu_layers: -1                             # fits Qwen2.5-7B Q4_K_M in 12GB
+
+pipeline:
+  num_candidates: 5
+  task_name: quadcopter_agile_navigation       # Updated to reflect the new sequence task
+  save_all_raw: false
+  random_seed: 42
+
+runtime_test:
+  batch_size: 16
+  max_episode_len: 500
+
+domain:
+  name: "quadcopter_navigation"                           # must match prompts/quadcopter_navigation.py
+  task_description: |
+    We train a quadrotor in an Isaac Lab RL environment to fly aggressively through a sequential curriculum of targets.
+    At any instant, `self._desired_pos_w` represents the center of the current gate / waypoint selected by the goal generator.
+    When the robot reaches the current gate, the environment switches `self._desired_pos_w` to the next target.
+    Since gate orientation and pass/fail signals are not available, the reward must rely on dense shaping to encourage reaching the current target quickly, maintaining aligned forward velocity, and preserving stable flight without excessive tilt.
+  env_reference_path: "envs/quadcopter_in_aerial_gym_sim.py"
+  step_dt: 0.02
+  cfg_scales:
+    lin_vel_reward_scale:          -0.05
+    ang_vel_reward_scale:          -0.01       # Updated to match the new baseline/few-shot
+    distance_to_goal_reward_scale:  15.0       # Updated from 1.50 to match the new baseline
+    tilt_reward_scale:             -0.05       # Added to support the new stability penalty
+  tensor_shapes:
+    "robot.data.root_lin_vel_b":      [16, 3]
+    "robot.data.root_ang_vel_b":      [16, 3]
+    "robot.data.root_pos_w":          [16, 3]
+    "robot.data.projected_gravity_b": [16, 3]
+    "desired_pos_w":                  [16, 3]

@@ -11,14 +11,32 @@ import re
 def _extract_forbidden_attrs(error_msg: str) -> list[str]:
     return re.findall(r"has no attribute '([^']+)'", error_msg)
 
+
 def _extract_shape_error(error_msg: str) -> str | None:
     if "size" in error_msg or "shape" in error_msg or "dimension" in error_msg:
         return error_msg
     return None
 
+
+def _extract_runtime_hint(error_msg: str) -> str | None:
+    """
+    Extract a concise 1-2 line hint from any runtime error message.
+    Strips long torch signature dumps (everything after 'expected one of:').
+    """
+    if not error_msg:
+        return None
+    # Remove verbose torch signature listings
+    cleaned = re.sub(r"expected one of:.*", "check the torch docs for correct usage.", error_msg, flags=re.DOTALL)
+    # Keep only first 2 meaningful lines
+    lines = [l.strip() for l in cleaned.splitlines() if l.strip()]
+    return " | ".join(lines[:2])
+
+
 def _build_failure_patch(all_results: list[dict]) -> str:
     forbidden_attrs: set[str] = set()
     shape_errors: set[str] = set()
+    runtime_hints: list[str] = []
+
     for r in all_results:
         if r.get("status") != "rejected":
             continue
@@ -28,33 +46,48 @@ def _build_failure_patch(all_results: list[dict]) -> str:
             forbidden_attrs.update(_extract_forbidden_attrs(msg))
             shape_err = _extract_shape_error(msg)
             if shape_err:
-                shape_errors.add(shape_err)
-    if not forbidden_attrs and not shape_errors:
+                shape_errors.add(shape_err[:120])
+            # Capture ALL runtime errors as hints, not just shape/attr ones
+            hint = _extract_runtime_hint(msg)
+            if hint and hint not in runtime_hints:
+                runtime_hints.append(hint)
+
+    if not forbidden_attrs and not shape_errors and not runtime_hints:
         return ""
-    lines = ["\n⚠️  PREVIOUS ATTEMPTS FAILED — avoid these exact mistakes:\n"]
+
+    lines = [" ⚠️  PREVIOUS ATTEMPTS FAILED — avoid these exact mistakes:"]
+
     if forbidden_attrs:
         lines.append("FORBIDDEN (these attributes do NOT exist in the env):")
         for attr in sorted(forbidden_attrs):
-            lines.append(f"  ✗  self.{attr}")
+            lines.append(f"  ✗ self.{attr}")
         lines.append("")
+
     if shape_errors:
         lines.append("SHAPE ERRORS seen in previous attempts:")
         for err in sorted(shape_errors):
-            lines.append(f"  ✗  {err}")
+            lines.append(f"  ✗ {err}")
         lines.append("")
+
+    if runtime_hints:
+        lines.append("OTHER RUNTIME ERRORS seen in previous attempts:")
+        for hint in runtime_hints[-3:]:  # cap at 3 to stay within token budget
+            lines.append(f"  ✗ {hint}")
+        lines.append("")
+
     lines.append("Only use the ALLOWED ATTRIBUTES listed above. Nothing else.")
-    return "\n".join(lines)
+    return "".join(lines)
 
 
 class RewardGenerationOrchestrator:
 
     def __init__(self, llm_client, config):
-        self.llm    = llm_client
+        self.llm = llm_client
         self.config = config
-        self.store  = RewardStore("outputs/rewards", "outputs/logs")
+        self.store = RewardStore("outputs/rewards", "outputs/logs")
 
     def run(self):
-        accepted    = []
+        accepted = []
         all_results = []
 
         for idx in range(self.config.pipeline.num_candidates):
@@ -62,13 +95,13 @@ class RewardGenerationOrchestrator:
             failure_patch = _build_failure_patch(all_results)
 
             messages = build_messages(
-                domain        = self.config.domain,
+                domain       = self.config.domain,
                 prior_results = all_results,
                 failure_patch = failure_patch,
             )
 
             temperatures = getattr(self.config.pipeline, "temperatures", None)
-            temperature  = (
+            temperature = (
                 temperatures[idx % len(temperatures)]
                 if temperatures else self.config.model.temperature
             )
@@ -81,10 +114,10 @@ class RewardGenerationOrchestrator:
             )
 
             record = dict(
-                candidate_index  = idx,
+                candidate_index = idx,
                 temperature_used = temperature,
-                raw_output       = raw_output,
-                code             = None,
+                raw_output = raw_output,
+                code = None,
             )
 
             # Stage 1: Code extraction
@@ -141,7 +174,7 @@ class RewardGenerationOrchestrator:
             all_results.append(record)
 
         self._print_summary(all_results)
-        self._print_rewards(all_results)   # ← print all reward functions
+        self._print_rewards(all_results)
         return accepted
 
     # ── Summary table ─────────────────────────────────────────────────────────
@@ -170,27 +203,27 @@ class RewardGenerationOrchestrator:
         rejected = [r for r in all_results if r.get("status") == "rejected"]
 
         if accepted:
-            print("\n" + "=" * 60)
+            print("" + "=" * 60)
             print(f"  ✅  ACCEPTED REWARD FUNCTIONS ({len(accepted)})")
             print("=" * 60)
             for i, r in enumerate(accepted, 1):
-                print(f"\n── Accepted #{i}  "
+                print(f"── Accepted #{i}  "
                       f"(candidate {r.get('candidate_index')}, "
                       f"temp={r.get('temperature_used')})")
                 print("-" * 60)
-                print(r.get("code", "<no code>"))
+                print(r.get("code", ""))
 
         if rejected:
-            print("\n" + "=" * 60)
+            print("" + "=" * 60)
             print(f"  ❌  REJECTED REWARD FUNCTIONS ({len(rejected)})")
             print("=" * 60)
             for i, r in enumerate(rejected, 1):
-                code   = r.get("code") or "<no code extracted>"
-                reason = r.get("reason", "unknown")
-                stage  = r.get("stage",  "unknown")
-                rt_msg = r.get("runtime_test", {}).get("message", "")
-                st_msg = r.get("static_validation", {}).get("message", "")
-                print(f"\n── Rejected #{i}  "
+                code    = r.get("code") or ""
+                reason  = r.get("reason", "unknown")
+                stage   = r.get("stage", "unknown")
+                rt_msg  = r.get("runtime_test", {}).get("message", "")
+                st_msg  = r.get("static_validation", {}).get("message", "")
+                print(f"── Rejected #{i}  "
                       f"(candidate {r.get('candidate_index')}, "
                       f"temp={r.get('temperature_used')})")
                 print(f"   Reason : {reason}  [{stage}]")
@@ -201,4 +234,7 @@ class RewardGenerationOrchestrator:
                 print("-" * 60)
                 print(code)
 
-        print("\n" + "=" * 60)
+        print("" + "=" * 60)
+        print(f"Accepted reward functions saved: {len(accepted)}")
+        for r in accepted:
+            print(f"  → {r.get('code_path', '')}")
