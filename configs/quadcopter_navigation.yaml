@@ -1,10 +1,10 @@
 # ─────────────────────────────────────────────────────────────
-#  Quadcopter agile sequential navigation domain
+#  Quadcopter Aerial Gym navigation domain
 #  RTX Ada4000 12GB VRAM  →  Qwen2.5-Coder-7B-Instruct Q4_K_M
 # ─────────────────────────────────────────────────────────────
 
 model:
-  temperature: 0.1                             # Lowered from 0.8 for stricter, deterministic code generation
+  temperature: 0.9                             # Stays low for stricter, deterministic code generation
   top_p: 0.95
   max_tokens: 2048
   n_ctx: 8192
@@ -12,7 +12,7 @@ model:
 
 pipeline:
   num_candidates: 5
-  task_name: quadcopter_agile_navigation       # Updated to reflect the new sequence task
+  task_name: quadcopter_aerial_gym_navigation  # Updated to reflect Aerial Gym framework
   save_all_raw: false
   random_seed: 42
 
@@ -21,22 +21,20 @@ runtime_test:
   max_episode_len: 500
 
 domain:
-  name: "quadcopter_navigation"                           # must match prompts/quadcopter_navigation.py
+  name: "quadcopter_navigation"                # must match prompts/quadcopter_navigation.py
   task_description: |
-    We train a quadrotor in an Isaac Lab RL environment to fly aggressively through a sequential curriculum of targets.
-    At any instant, `self._desired_pos_w` represents the center of the current gate / waypoint selected by the goal generator.
-    When the robot reaches the current gate, the environment switches `self._desired_pos_w` to the next target.
-    Since gate orientation and pass/fail signals are not available, the reward must rely on dense shaping to encourage reaching the current target quickly, maintaining aligned forward velocity, and preserving stable flight without excessive tilt.
+    We are training a quadrotor to navigate to a target position in an Aerial Gym RL environment. 
+    The reward function must process `pos_error`, penalize abrupt changes between `action` and `prev_action`, 
+    and update the `crashes` state if the drone flies out of bounds (distance > 8.0). 
+    It must return a tuple of (total_reward, crashes).
   env_reference_path: "envs/quadcopter_in_aerial_gym_sim.py"
   step_dt: 0.02
   cfg_scales:
-    lin_vel_reward_scale:          -0.05
-    ang_vel_reward_scale:          -0.01       # Updated to match the new baseline/few-shot
-    distance_to_goal_reward_scale:  15.0       # Updated from 1.50 to match the new baseline
-    tilt_reward_scale:             -0.05       # Added to support the new stability penalty
+    pos_reward_scale:            2.0           # Maps to parameter_dict inside the prompt
+    dist_reward_scale:           1.0
+    action_penalty_scale:       -0.05
   tensor_shapes:
-    "robot.data.root_lin_vel_b":      [16, 3]
-    "robot.data.root_ang_vel_b":      [16, 3]
-    "robot.data.root_pos_w":          [16, 3]
-    "robot.data.projected_gravity_b": [16, 3]
-    "desired_pos_w":                  [16, 3]
+    "pos_error":      [16, 3]                  # Batch size 16, 3D vector
+    "crashes":        [16]                     # 1D batch tensor for crash states
+    "action":         [16, 4]                  # 4 rotor commands
+    "prev_action":    [16, 4]                  # 4 rotor commands from previous step

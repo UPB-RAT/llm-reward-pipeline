@@ -212,9 +212,10 @@ Run the pipeline to generate and validate reward function candidates:
 
 ```bash
 python -m reward_generator.cli \
+  --config configs/quadcopter_navigation.yaml \
   --model-path models/qwen2.5-coder-7b-instruct-q4_k_m.gguf \
   --num-candidates 5 \
-  --task long_range_navigation
+  --clean
 ```
 
 Results are saved to:

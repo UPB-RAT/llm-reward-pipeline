@@ -2,7 +2,6 @@
 # runtime_tester.py  —  DOMAIN-AGNOSTIC RUNTIME SMOKE TEST
 # ============================================================
 import re
-import types
 import inspect
 import traceback
 import ast
@@ -15,18 +14,15 @@ CANDIDATE_FUNC_NAMES = ["_get_rewards"]
 _JIT_DECORATOR_RE = re.compile(r"^@torch\.jit\.script\s*\n", re.MULTILINE)
 
 def _strip_jit_decorators(code: str) -> str:
+    # We strip the decorator because running JIT compilation inside an exec() 
+    # namespace can sometimes cause unnecessary runtime compilation overhead or bugs.
     return _JIT_DECORATOR_RE.sub("", code)
-
-def _is_method_style(func) -> bool:
-    params = list(inspect.signature(func).parameters.keys())
-    return len(params) > 0 and params[0] == "self"
 
 # ── Static Analysis (AST) ───────────────────────────────────────────────────
 def _check_for_dim1_on_1d_slices(code: str) -> tuple[bool, str]:
     """
     Statically analyzes the generated code to catch the common mistake of
-    applying dim=1 to 1D slices (e.g., self._robot.data.root_pos_w[:, 2])
-    before execution.
+    applying dim=1 to 1D slices (e.g., pos_error[:, 2]) before execution.
     """
     try:
         tree = ast.parse(code)
@@ -34,7 +30,7 @@ def _check_for_dim1_on_1d_slices(code: str) -> tuple[bool, str]:
         return False, f"Syntax Error in generated code: {e}"
 
     for node in ast.walk(tree):
-        # Look for function calls (like torch.abs, torch.square, etc.)
+        # Look for function calls (like torch.abs, torch.square, torch.norm, etc.)
         if isinstance(node, ast.Call):
             has_dim_1 = False
             # Check if dim=1 is passed as a keyword argument
@@ -57,52 +53,35 @@ def _check_for_dim1_on_1d_slices(code: str) -> tuple[bool, str]:
                             )
     return True, "OK"
 
-# ── Fake env ─────────────────────────────────────────────────────────────────
-def _make_dummy_env(batch_size: int, domain) -> types.SimpleNamespace:
+# ── Fake Arguments Generator ─────────────────────────────────────────────────
+def _make_dummy_args(batch_size: int, domain) -> dict:
     """
-    Covers all attribute access patterns the LLM may use.
+    Generates dummy tensors based strictly on the YAML tensor_shapes configuration 
+    and packages the cfg_scales into the parameter_dict.
     """
-    env = types.SimpleNamespace()
+    kwargs = {}
+    
+    # 1. Create dummy tensors based on shape configs
+    for arg_name, shape_list in domain.tensor_shapes.items():
+        # Enforce the runtime batch size
+        actual_shape = [batch_size] + shape_list[1:]
+        kwargs[arg_name] = torch.randn(actual_shape)
+        
+        # If it's the crashes tensor, clamp to 0 or 1 like the real environment
+        if arg_name == "crashes":
+            kwargs[arg_name] = torch.where(kwargs[arg_name] > 0, 1.0, 0.0)
 
-    cfg = types.SimpleNamespace(**domain.cfg_scales)
-    env.cfg = cfg
-    env.step_dt = domain.step_dt
+    # 2. Add scalar defaults
+    kwargs["curriculum_level_multiplier"] = 1.0
 
-    # ── Quadcopter-style nested robot attributes ──────────────────────────────
-    robot_data = types.SimpleNamespace()
-    desired_pos = torch.randn(batch_size, 3)
-    root_pos    = torch.randn(batch_size, 3)
-    root_pos[:, 2] = torch.rand(batch_size) * 1.5 + 0.3
+    # 3. Create parameter_dict from cfg_scales
+    param_dict = {}
+    if hasattr(domain, "cfg_scales"):
+        for k, v in domain.cfg_scales.items():
+            param_dict[k] = torch.tensor(v, dtype=torch.float32)
+    kwargs["parameter_dict"] = param_dict
 
-    for attr, shape in domain.tensor_shapes.items():
-        parts = attr.split(".")
-        if len(parts) >= 3 and parts[0] in ("robot", "_robot"):
-            tensor = torch.randn([batch_size] + shape[1:])
-            setattr(robot_data, parts[-1], tensor)
-
-    robot = types.SimpleNamespace(data=robot_data)
-    env.robot  = robot
-    env._robot = robot
-
-    env.desired_pos_w  = desired_pos
-    env._desired_pos_w = desired_pos
-    env.robot.data.root_pos_w  = root_pos
-    env._robot.data.root_pos_w = root_pos
-
-    # ── Cartpole-style attributes ─────────────────────────────────────────────
-    joint_pos = torch.randn(batch_size, 2)
-    joint_vel = torch.randn(batch_size, 2)
-    env.joint_pos = joint_pos
-    env.joint_vel = joint_vel
-
-    env._pole_dof_idx = [1]
-    env._cart_dof_idx = [0]
-
-    env.reset_terminated = (torch.rand(batch_size) > 0.9)
-    env.reset_buf        = env.reset_terminated
-    env.terminated       = env.reset_terminated
-
-    return env
+    return kwargs
 
 # ── Main entry point ─────────────────────────────────────────────────────────
 def runtime_test(code: str, batch_size: int, domain) -> tuple[bool, str, dict]:
@@ -113,10 +92,12 @@ def runtime_test(code: str, batch_size: int, domain) -> tuple[bool, str, dict]:
     if not is_valid_ast:
         return False, ast_error, {}
 
-    env = _make_dummy_env(batch_size, domain)
+    # 2. Prepare dummy arguments
+    kwargs = _make_dummy_args(batch_size, domain)
 
     try:
         namespace = {}
+        # Execute the generated code string to load the function into namespace
         exec(compile(clean_code, "<reward>", "exec"), {"torch": torch}, namespace)
 
         # ── Detect function name ──────────────────────────────────────────────
@@ -128,26 +109,32 @@ def runtime_test(code: str, batch_size: int, domain) -> tuple[bool, str, dict]:
         func = namespace[func_name]
 
         # ── Calling convention ────────────────────────────────────────────────
-        if _is_method_style(func):
-            bound  = types.MethodType(func, env)
-            reward = bound()
-        else:
-            return False, "Function must take `self` as the first argument.", {}
+        # Pass the dictionary as kwargs to the standalone function
+        out = func(**kwargs)
 
-        # ── Shape check ──────────────────────────────────────────────────────
-        if not isinstance(reward, torch.Tensor):
-            return False, f"Return type is {type(reward).__name__}, expected torch.Tensor", {}
+        # ── Type & Shape check ────────────────────────────────────────────────
+        if not isinstance(out, tuple) or len(out) != 2:
+            return False, f"Return type must be a tuple of two items (total_reward, crashes), got {type(out)}", {}
+
+        reward, out_crashes = out
+
+        if not isinstance(reward, torch.Tensor) or not isinstance(out_crashes, torch.Tensor):
+            return False, "Both returned items must be torch.Tensor", {}
+
         if reward.shape != (batch_size,):
             return False, (
-                f"Wrong final shape: got {tuple(reward.shape)}, expected ({batch_size},). "
+                f"Wrong final reward shape: got {tuple(reward.shape)}, expected ({batch_size},). "
                 f"You likely forgot to sum over components or used dim=1 incorrectly."
             ), {}
+            
+        if out_crashes.shape != (batch_size,):
+            return False, f"Wrong crashes shape: got {tuple(out_crashes.shape)}, expected ({batch_size},).", {}
 
         # ── NaN / Inf check ──────────────────────────────────────────────────
-        if torch.isnan(reward).any():
-            return False, "Reward contains NaN", {}
-        if torch.isinf(reward).any():
-            return False, "Reward contains Inf", {}
+        if torch.isnan(reward).any() or torch.isnan(out_crashes).any():
+            return False, "Returned tensors contain NaN", {}
+        if torch.isinf(reward).any() or torch.isinf(out_crashes).any():
+            return False, "Returned tensors contain Inf", {}
 
         metrics = {
             "mean": reward.mean().item(),
@@ -167,7 +154,7 @@ def runtime_test(code: str, batch_size: int, domain) -> tuple[bool, str, dict]:
                 f"Runtime call failed: {error_msg}\n\n"
                 f"CRITICAL FIX NEEDED: You tried to apply `dim=1` on a 1-dimensional tensor (shape [N]). "
                 f"Look at your code for operations on things like `[:, 2]` or previously computed 1D variables. "
-                f"Remove `dim=1` from these operations. Only use `dim=1` for 2D tensors like `root_pos_w`."
+                f"Remove `dim=1` from these operations. Only use `dim=1` for 2D tensors like `pos_error`."
             ), {}
             
         return False, f"Runtime call failed: {error_msg}\n{tb_str}", {}
