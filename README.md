@@ -208,11 +208,66 @@ tests/test_pipeline.py::test_extract_validate_runtime PASSED
 
 ## Step 8 — Generate Reward Candidates
 
-Run the pipeline to generate and validate reward function candidates:
+### Option A — Local GGUF Model (Offline)
+
+Run the pipeline to generate and validate reward function candidates using local `.gguf` checkpoints (via llama-cpp-python):
 
 ```bash
 python -m reward_generator.cli \
   --model-path models/qwen2.5-coder-7b-instruct-q4_k_m.gguf \
+  --num-candidates 5 \
+  --task long_range_navigation
+```
+
+If you wish to use a local GGUF LoRA adapter, you can also specify it:
+```bash
+python -m reward_generator.cli \
+  --model-path models/qwen2.5-coder-7b-instruct-q4_k_m.gguf \
+  --adapter-path models/your-adapter.bin \
+  --num-candidates 5 \
+  --task long_range_navigation
+```
+
+### Option B — HuggingFace Transformers Model (Base & Fine-tuned)
+
+You can run base or fine-tuned model adapters directly from HuggingFace using the `HFLLMClient`. The backend client type is auto-detected as `hf` if `--model-path` is not a `.gguf` file.
+
+To run the base model (`unsloth/Qwen2.5-Coder-7B-Instruct-bnb-4bit`):
+```bash
+python -m reward_generator.cli \
+  --model-path unsloth/Qwen2.5-Coder-7B-Instruct-bnb-4bit \
+  --num-candidates 5 \
+  --task long_range_navigation
+```
+
+To run any of the fine-tuned LoRA adapter models, specify the `--adapter-path`:
+
+```bash
+# Model 1: Gemini-300 fine-tuned model
+python -m reward_generator.cli \
+  --model-path unsloth/Qwen2.5-Coder-7B-Instruct-bnb-4bit \
+  --adapter-path UPB-RAT-Lab/qwen2.5-coder-7b-sft-v1-gemini-300 \
+  --num-candidates 5 \
+  --task long_range_navigation
+
+# Model 2: Huyen-889 fine-tuned model
+python -m reward_generator.cli \
+  --model-path unsloth/Qwen2.5-Coder-7B-Instruct-bnb-4bit \
+  --adapter-path UPB-RAT-Lab/qwen2.5-coder-7b-sft-v1-huyen-889 \
+  --num-candidates 5 \
+  --task long_range_navigation
+
+# Model 3: Chatgpt-300 fine-tuned model
+python -m reward_generator.cli \
+  --model-path unsloth/Qwen2.5-Coder-7B-Instruct-bnb-4bit \
+  --adapter-path UPB-RAT-Lab/qwen2.5-coder-7b-sft-v1-chatgpt-300 \
+  --num-candidates 5 \
+  --task long_range_navigation
+
+# Model 4: Grok-300 fine-tuned model
+python -m reward_generator.cli \
+  --model-path unsloth/Qwen2.5-Coder-7B-Instruct-bnb-4bit \
+  --adapter-path UPB-RAT-Lab/qwen2.5-coder-7b-sft-v1-grok-300 \
   --num-candidates 5 \
   --task long_range_navigation
 ```

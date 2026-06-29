@@ -12,3 +12,7 @@ numpy>=1.26
 torch>=2.6
 huggingface-hub
 pytest
+transformers
+peft
+accelerate
+bitsandbytes

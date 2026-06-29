@@ -14,4 +14,8 @@ dependencies:
       - torchaudio
       - huggingface-hub
       - pytest
+      - transformers
+      - peft
+      - accelerate
+      - bitsandbytes
       # llama-cpp-python is built from source after activation — see README Step 4
