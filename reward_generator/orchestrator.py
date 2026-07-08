@@ -21,7 +21,7 @@ class RewardGenerationOrchestrator:
 
             # --- Build prompt using ALL prior results (accepted + rejected) ---
             messages = build_messages(
-                task_name=self.config.pipeline.task_name,
+                config=self.config,
                 prior_results=all_results,
             )
 
@@ -75,7 +75,9 @@ class RewardGenerationOrchestrator:
                 continue
 
             # ── STAGE 3: Diversity Check ──────────────────────────────────
-            ok_diverse, msg_diverse = diversity_check(code)
+            domain = getattr(self.config, "domain", None)
+            ref_comps = set(domain.cfg_scales.keys()) if domain else None
+            ok_diverse, msg_diverse = diversity_check(code, reference_components=ref_comps)
             record["diversity_check"] = {"ok": ok_diverse, "message": msg_diverse}
             if not ok_diverse:
                 record["status"] = "rejected"

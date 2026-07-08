@@ -27,17 +27,30 @@ class RuntimeTestConfig:
 
 
 @dataclass
+class DomainConfig:
+    name: str
+    task_description: str
+    env_reference_path: str
+    step_dt: float
+    cfg_scales: dict[str, float]
+    tensor_shapes: dict[str, list[int]]
+
+
+@dataclass
 class AppConfig:
     model: ModelConfig
     pipeline: PipelineConfig
     runtime_test: RuntimeTestConfig
+    domain: DomainConfig | None = None
 
 
 def load_config(path: str | Path) -> AppConfig:
     with open(path, "r", encoding="utf-8") as f:
         data = yaml.safe_load(f)
+    domain_data = data.get("domain")
     return AppConfig(
         model=ModelConfig(**data["model"]),
         pipeline=PipelineConfig(**data["pipeline"]),
         runtime_test=RuntimeTestConfig(**data["runtime_test"]),
+        domain=DomainConfig(**domain_data) if domain_data else None,
     )

@@ -1,7 +1,7 @@
 import ast
 
 # Component names present in the baseline IsaacLab reference reward
-REFERENCE_COMPONENTS = {
+DEFAULT_REFERENCE_COMPONENTS = {
     "lin_vel",
     "ang_vel",
     "distance_to_goal",
@@ -12,7 +12,9 @@ REFERENCE_COMPONENTS = {
 NOVELTY_REQUIRED = 2
 
 
-def diversity_check(code: str) -> tuple[bool, str]:
+def diversity_check(code: str, reference_components: set[str] | None = None) -> tuple[bool, str]:
+    if reference_components is None:
+        reference_components = DEFAULT_REFERENCE_COMPONENTS
     try:
         tree = ast.parse(code)
     except SyntaxError:
@@ -35,7 +37,7 @@ def diversity_check(code: str) -> tuple[bool, str]:
     assigned_names -= noise
 
     # Count names that are NOT in the reference
-    novel_names = assigned_names - REFERENCE_COMPONENTS
+    novel_names = assigned_names - reference_components
     novel_count = len(novel_names)
 
     if novel_count < NOVELTY_REQUIRED:
