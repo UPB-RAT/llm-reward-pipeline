@@ -6,6 +6,8 @@ models/
 *.pt
 *.pth
 
+outputs.zip
+
 # Pipeline outputs
 outputs/
 outputs_*

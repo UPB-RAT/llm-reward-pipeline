@@ -18,6 +18,7 @@ class PipelineConfig:
     task_name: str
     save_all_raw: bool
     random_seed: int
+    feedback: bool = False
 
 
 @dataclass

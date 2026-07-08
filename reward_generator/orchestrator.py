@@ -23,6 +23,7 @@ class RewardGenerationOrchestrator:
             messages = build_messages(
                 config=self.config,
                 prior_results=all_results,
+                feedback=self.config.pipeline.feedback,
             )
 
             # --- LLM inference ---

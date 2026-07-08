@@ -20,6 +20,8 @@ def parse_args():
         help="LLM client backend: 'local' (llama.cpp) or 'hf' (Transformers). Auto-detected if not specified.",
     )
     parser.add_argument("--num-candidates", type=int, default=None)
+    parser.add_argument("--feedback",       action="store_true", default=None,
+                        help="Enable full feedback block in prompts (previous code, metrics, improvement directives).")
     parser.add_argument("--task",           dest="task_name", default=None)
     parser.add_argument(
         "--clean",
@@ -47,6 +49,8 @@ def main():
         config.pipeline.num_candidates = args.num_candidates
     if args.task_name is not None:
         config.pipeline.task_name = args.task_name
+    if args.feedback is not None:
+        config.pipeline.feedback = args.feedback
 
     if args.clean:
         print("\n── Cleaning previous outputs ──")

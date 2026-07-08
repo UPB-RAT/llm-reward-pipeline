@@ -44,7 +44,7 @@ class LocalLLMClient:
             max_tokens=max_tokens,
             temperature=temperature,
             top_p=top_p,
-            stop=["\n\n\n", "\n\n"],
+
         )
         content = resp["choices"][0]["message"]["content"]
         finish_reason = resp["choices"][0]["finish_reason"]
