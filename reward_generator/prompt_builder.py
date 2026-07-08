@@ -26,7 +26,7 @@ def build_messages(config, prior_results: list = None) -> list[dict]:
 def _build_domain_messages(domain, prior_results: list) -> list[dict]:
     mod = importlib.import_module(f"prompts.{domain.name}")
 
-    dynamic_tensor_ref = _build_tensor_reference(domain)
+    tensor_ref = getattr(mod, "TENSOR_REFERENCE", None) or _build_tensor_reference(domain)
     baseline_code = Path(domain.env_reference_path).read_text()
     prior_str = _format_prior_results(prior_results)
     n = len(prior_results)
@@ -40,7 +40,7 @@ def _build_domain_messages(domain, prior_results: list) -> list[dict]:
 
     user_content = mod.USER_TEMPLATE.format(
         task_description=domain.task_description,
-        tensor_reference=dynamic_tensor_ref,
+        tensor_reference=tensor_ref,
         few_shot=few_shot,
         baseline_code=baseline_code,
         prior_results=prior_str,
