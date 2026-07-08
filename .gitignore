@@ -8,6 +8,7 @@ models/
 
 # Pipeline outputs
 outputs/
+outputs_*
 
 # Python
 __pycache__/

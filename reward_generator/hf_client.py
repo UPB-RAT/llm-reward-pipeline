@@ -46,25 +46,35 @@ class HFLLMClient:
     def generate(self, messages, max_tokens=2048, temperature=0.7, top_p=0.95):
         import torch
         try:
-            input_ids = self.tokenizer.apply_chat_template(
-                messages, tokenize=True, add_generation_prompt=True, return_tensors="pt"
-            ).to(self.model.device)
+            torch.seed()
+
+            encodings = self.tokenizer.apply_chat_template(
+                messages,
+                tokenize=True,
+                add_generation_prompt=True,
+                return_tensors="pt",
+            )
+
+            encodings = {k: v.to(self.model.device) for k, v in encodings.items()}
 
             do_sample = temperature > 0.0
-            gen_kwargs = {
-                "input_ids": input_ids,
-                "max_new_tokens": max_tokens,
-                "pad_token_id": self.tokenizer.pad_token_id or self.tokenizer.eos_token_id,
-                "eos_token_id": self.tokenizer.eos_token_id,
-                "do_sample": do_sample,
-            }
-            if do_sample:
-                gen_kwargs.update({"temperature": temperature, "top_p": top_p})
 
             with torch.no_grad():
-                outputs = self.model.generate(**gen_kwargs)
+                outputs = self.model.generate(
+                    **encodings,
+                    max_new_tokens=max_tokens,
+                    pad_token_id=self.tokenizer.pad_token_id or self.tokenizer.eos_token_id,
+                    eos_token_id=self.tokenizer.eos_token_id,
+                    do_sample=do_sample,
+                    temperature=temperature if do_sample else None,
+                    top_p=top_p if do_sample else None,
+                    top_k=40 if do_sample else None,
+                    repetition_penalty=1.1,
+                )
 
-            gen_tokens = outputs[0][input_ids.shape[1]:]
+            prompt_len = encodings["input_ids"].shape[1]
+            gen_tokens = outputs[0][prompt_len:]
+
             if len(gen_tokens) >= max_tokens:
                 print(f"  ⚠️  WARNING: generation stopped at max_tokens limit ({max_tokens}).")
             return self.tokenizer.decode(gen_tokens, skip_special_tokens=True)

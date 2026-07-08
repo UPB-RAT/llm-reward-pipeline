@@ -9,3 +9,10 @@ def extract_code_block(text: str) -> str | None:
     if "def compute_reward" in stripped:
         return stripped
     return None
+
+
+def extract_code_fallback(text: str) -> str | None:
+    stripped = text.strip()
+    if "def _get_rewards" in stripped:
+        return stripped
+    return None

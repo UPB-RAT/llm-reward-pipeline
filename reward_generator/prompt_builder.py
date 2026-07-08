@@ -5,11 +5,11 @@ def build_messages(task_name: str, prior_results: list = None) -> list[dict]:
     if task_name != "long_range_navigation":
         raise ValueError(f"Unsupported task: {task_name}")
 
-    prior_results = prior_results or []
-    feedback_block = _build_feedback_block(prior_results)
+    # prior_results = prior_results or []
+    # feedback_block = _build_feedback_block(prior_results)
     user_content = USER_TEMPLATE
-    if feedback_block:
-        user_content += f"\n\n{feedback_block}"
+    # if feedback_block:
+    #     user_content += f"\n\n{feedback_block}"
 
     return [
         {"role": "system", "content": SYSTEM_PROMPT},
