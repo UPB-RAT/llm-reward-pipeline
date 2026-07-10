@@ -102,6 +102,7 @@ def _build_dummy_env(N: int, max_episode_len: int):
         def __init__(self):
             self._robot         = _Robot()
             self._desired_pos_w = torch.randn(N, 3) * 10.0
+            self.desired_pos_w  = self._desired_pos_w
             self.cfg            = _Cfg()
             self.step_dt        = 0.02
             self.episode_length_buf = torch.randint(0, max_episode_len, (N,))
