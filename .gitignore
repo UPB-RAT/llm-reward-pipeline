@@ -6,8 +6,11 @@ models/
 *.pt
 *.pth
 
+outputs.zip
+
 # Pipeline outputs
 outputs/
+outputs_*
 
 # Python
 __pycache__/

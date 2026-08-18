@@ -6,10 +6,11 @@ model:
   n_gpu_layers: -1
 
 pipeline:
-  num_candidates: 4
+  num_candidates: 100
   task_name: long_range_navigation
-  save_all_raw: true
+  save_all_raw: false
   random_seed: 42
+  feedback: false
 
 runtime_test:
   batch_size: 16

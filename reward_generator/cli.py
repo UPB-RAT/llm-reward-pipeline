@@ -4,6 +4,7 @@ from pathlib import Path
 
 from reward_generator.config import load_config
 from reward_generator.llm_client import LocalLLMClient
+from reward_generator.hf_client import HFLLMClient
 from reward_generator.orchestrator import RewardGenerationOrchestrator
 
 
@@ -11,7 +12,16 @@ def parse_args():
     parser = argparse.ArgumentParser(description="UAV reward generation pipeline")
     parser.add_argument("--config",         default="configs/default.yaml")
     parser.add_argument("--model-path",     required=True)
+    parser.add_argument("--adapter-path",   default=None, help="Path/ID of the LoRA adapter (GGUF or HF).")
+    parser.add_argument(
+        "--client-type",
+        choices=["local", "hf"],
+        default=None,
+        help="LLM client backend: 'local' (llama.cpp) or 'hf' (Transformers). Auto-detected if not specified.",
+    )
     parser.add_argument("--num-candidates", type=int, default=None)
+    parser.add_argument("--feedback",       action="store_true", default=None,
+                        help="Enable full feedback block in prompts (previous code, metrics, improvement directives).")
     parser.add_argument("--task",           dest="task_name", default=None)
     parser.add_argument(
         "--clean",
@@ -39,16 +49,31 @@ def main():
         config.pipeline.num_candidates = args.num_candidates
     if args.task_name is not None:
         config.pipeline.task_name = args.task_name
+    if args.feedback is not None:
+        config.pipeline.feedback = args.feedback
 
     if args.clean:
         print("\n── Cleaning previous outputs ──")
         clean_outputs()
 
-    llm = LocalLLMClient(
-        model_path=args.model_path,
-        n_ctx=config.model.n_ctx,
-        n_gpu_layers=config.model.n_gpu_layers,
-    )
+    client_type = args.client_type
+    if client_type is None:
+        client_type = "local" if args.model_path.endswith(".gguf") or Path(args.model_path).is_file() else "hf"
+
+    if client_type == "local":
+        llm = LocalLLMClient(
+            base_model_path=args.model_path,
+            adapter_path=args.adapter_path,
+            n_ctx=config.model.n_ctx,
+            n_gpu_layers=config.model.n_gpu_layers,
+        )
+    else:
+        llm = HFLLMClient(
+            base_model_path=args.model_path,
+            adapter_path=args.adapter_path,
+            n_ctx=config.model.n_ctx,
+            n_gpu_layers=config.model.n_gpu_layers,
+        )
     orchestrator = RewardGenerationOrchestrator(llm, config)
     accepted = orchestrator.run()
 

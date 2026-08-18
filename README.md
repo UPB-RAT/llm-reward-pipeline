@@ -14,37 +14,45 @@ This repository implements **Phase 1**:
 ## Repository Structure
 
 ```text
-uav-reward-gen/
+llm-reward-pipeline/
 ├── README.md
-├── environment.yaml          # primary: conda setup
-├── requirements.txt          # fallback: pip-only setup
+├── environment.yaml              # primary: conda setup
+├── requirements.txt              # fallback: pip-only setup
 ├── configs/
-│   └── default.yaml
+│   ├── default.yaml              # UAV navigation defaults
+│   └── quadcopter.yaml           # Quadcopter hover/nav domain config
 ├── prompts/
 │   ├── __init__.py
-│   └── uav_navigation.py
+│   ├── uav_navigation.py         # Prompts for long_range_navigation task
+│   └── quadcopter.py             # Prompts for quadcopter task
 ├── reward_generator/
 │   ├── __init__.py
-│   ├── cli.py
-│   ├── config.py
-│   ├── llm_client.py
-│   ├── orchestrator.py
-│   ├── prompt_builder.py
-│   └── reward_store.py
+│   ├── cli.py                    # CLI entry point (argparse)
+│   ├── config.py                 # Dataclass config loader (YAML)
+│   ├── llm_client.py             # Local GGUF client (llama-cpp-python)
+│   ├── hf_client.py              # HuggingFace Transformers client (with LoRA)
+│   ├── orchestrator.py           # Main generation loop + validation pipeline
+│   ├── prompt_builder.py         # Dynamic prompt construction with feedback
+│   └── reward_store.py           # Save accepted/rejected candidates to disk
 ├── validators/
 │   ├── __init__.py
-│   ├── ast_validator.py
-│   ├── code_extractor.py
-│   └── runtime_tester.py
+│   ├── ast_validator.py          # Static safety checks via Python AST
+│   ├── code_extractor.py         # Strips markdown fences from LLM output
+│   ├── diversity_checker.py      # Ensures novelty vs. reference components
+│   └── runtime_tester.py         # Executes function on dummy tensors
+├── envs/
+│   └── quadcopter_env_reference.py  # Full IsaacLab QuadcopterEnv reference
 ├── utils/
 │   ├── __init__.py
-│   └── io.py
+│   └── io.py                     # File I/O helpers
+├── scripts/
+│   └── rate_calc.py              # Typer CLI to compute accept/reject rates
 ├── tests/
 │   ├── __init__.py
 │   └── test_pipeline.py
 └── outputs/
-    ├── rewards/
-    └── logs/
+    ├── rewards/                  # Accepted reward .py + .json files
+    └── logs/                     # Full generation logs
 ```
 
 ---
@@ -96,8 +104,8 @@ If not installed, download Miniconda from https://docs.conda.io/en/latest/minico
 ## Step 1 — Clone the Repository
 
 ```bash
-git clone https://github.com/your-username/uav-reward-gen.git
-cd uav-reward-gen
+git clone https://github.com/your-username/llm-reward-pipeline.git
+cd llm-reward-pipeline
 ```
 
 ---
@@ -208,7 +216,26 @@ tests/test_pipeline.py::test_extract_validate_runtime PASSED
 
 ## Step 8 — Generate Reward Candidates
 
-Run the pipeline to generate and validate reward function candidates:
+### CLI Flags
+
+| Flag | Required | Description |
+|---|---|---|
+| `--model-path` | Yes | GGUF file path or HuggingFace model ID |
+| `--adapter-path` | No | LoRA adapter path (GGUF `.bin` or HF adapter ID) |
+| `--client-type` | No | `local` (llama.cpp) or `hf` (Transformers). Auto-detected if not specified |
+| `--num-candidates` | No | Number of reward functions to generate (default: config value) |
+| `--feedback` | No | Enable full feedback block in prompts (previous code, metrics, improvement directives) |
+| `--task` | No | Task name: `long_range_navigation` or `quadcopter` |
+| `--config` | No | Path to YAML config (default: `configs/default.yaml`) |
+| `--clean` | No | Delete all previous outputs before running |
+
+---
+
+### Option A — Local GGUF Model (Offline)
+
+Run the pipeline to generate and validate reward function candidates using local `.gguf` checkpoints (via llama-cpp-python):
+
+**UAV Navigation task (`long_range_navigation`):**
 
 ```bash
 python -m reward_generator.cli \
@@ -217,8 +244,98 @@ python -m reward_generator.cli \
   --task long_range_navigation
 ```
 
+**Quadcopter task (`quadcopter`):**
+
+```bash
+python -m reward_generator.cli \
+  --config configs/quadcopter.yaml \
+  --model-path models/qwen2.5-coder-7b-instruct-q4_k_m.gguf \
+  --num-candidates 5 \
+  --task quadcopter
+```
+
+**With a local GGUF LoRA adapter:**
+
+```bash
+python -m reward_generator.cli \
+  --model-path models/qwen2.5-coder-7b-instruct-q4_k_m.gguf \
+  --adapter-path models/your-adapter.bin \
+  --num-candidates 5 \
+  --task quadcopter
+```
+
+### Option B — HuggingFace Transformers Model (Base & Fine-tuned)
+
+You can run base or fine-tuned model adapters directly from HuggingFace using the `HFLLMClient`. The backend client type is auto-detected as `hf` if `--model-path` is not a `.gguf` file.
+
+**UAV Navigation task (`long_range_navigation`):**
+
+```bash
+# Base model
+python -m reward_generator.cli \
+  --model-path unsloth/Qwen2.5-Coder-7B-Instruct-bnb-4bit \
+  --num-candidates 5 \
+  --task long_range_navigation
+
+# Fine-tuned model (no adapter — full SFT weights)
+python -m reward_generator.cli \
+  --model-path UPB-RAT-Lab/qwen2.5-coder-7b-sft-v2-huyen-889 \
+  --num-candidates 5 \
+  --task long_range_navigation
+
+# Base model + LoRA adapter
+python -m reward_generator.cli \
+  --model-path unsloth/Qwen2.5-Coder-7B-Instruct-bnb-4bit \
+  --adapter-path UPB-RAT-Lab/qwen2.5-coder-7b-sft-v2-huyen-889 \
+  --num-candidates 5 \
+  --task long_range_navigation
+```
+
+**Quadcopter task (`quadcopter`):**
+
+Uses `configs/quadcopter.yaml` which includes domain-specific tensor shapes, cfg scales, and environment constraints:
+
+```bash
+# Base model
+python -m reward_generator.cli \
+  --config configs/quadcopter.yaml \
+  --model-path unsloth/Qwen2.5-Coder-7B-Instruct-bnb-4bit \
+  --num-candidates 5 \
+  --task quadcopter
+
+# Fine-tuned model (full SFT weights)
+python -m reward_generator.cli \
+  --config configs/quadcopter.yaml \
+  --model-path UPB-RAT-Lab/qwen2.5-coder-7b-sft-v2-huyen-889 \
+  --num-candidates 5 \
+  --task quadcopter
+
+# Generate 1000 candidates, no feedback
+python -m reward_generator.cli \
+  --config configs/quadcopter.yaml \
+  --model-path UPB-RAT-Lab/qwen2.5-coder-7b-sft-v2-huyen-889 \
+  --num-candidates 1000 \
+  --task quadcopter
+
+# Generate with feedback enabled
+python -m reward_generator.cli \
+  --config configs/quadcopter.yaml \
+  --model-path UPB-RAT-Lab/qwen2.5-coder-7b-sft-v2-huyen-889 \
+  --num-candidates 50 \
+  --feedback \
+  --task quadcopter
+
+# Clean previous outputs and regenerate
+python -m reward_generator.cli \
+  --config configs/quadcopter.yaml \
+  --model-path UPB-RAT-Lab/qwen2.5-coder-7b-sft-v2-huyen-889 \
+  --num-candidates 10 \
+  --clean \
+  --task quadcopter
+```
+
 Results are saved to:
-- `outputs/rewards/` — accepted reward `.py` files
+- `outputs/rewards/` — accepted reward `.py` files + `.json` metadata
 - `outputs/logs/` — full generation logs in `.json` format
 
 ---
@@ -263,13 +380,16 @@ CMAKE_ARGS="-DGGML_CUDA=on" pip install llama-cpp-python --no-binary llama-cpp-p
 [Task Prompt]
      │
      ▼
-[LLM: Qwen2.5-Coder-7B-Instruct (local)]
+[LLM: Qwen2.5-Coder-7B-Instruct (local or HuggingFace)]
      │  generates reward function code
      ▼
 [Code Extractor]  ← strips markdown fences
      │
      ▼
 [AST Validator]   ← static safety checks
+     │
+     ▼
+[Diversity Checker] ← ensures ≥2 novel components vs. reference
      │
      ▼
 [Runtime Tester]  ← smoke test on dummy tensors
