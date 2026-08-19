@@ -64,7 +64,13 @@ def build_messages(
     prompt_override: str | None = None,
 ) -> list[dict]:
     if prompt_override is not None:
-        return [{"role": "user", "content": prompt_override}]
+        content = prompt_override
+        if feedback:
+            prior_results = prior_results or []
+            patch = _build_failure_patch(prior_results)
+            if patch:
+                content += f"\n\n{patch}"
+        return [{"role": "user", "content": content}]
 
     prior_results = prior_results or []
     style = getattr(config.pipeline, "prompt_style", DEFAULT_PROMPT_STYLE)
