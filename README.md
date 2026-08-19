@@ -24,7 +24,8 @@ llm-reward-pipeline/
 ├── prompts/
 │   ├── __init__.py
 │   ├── uav_navigation.py         # Prompts for long_range_navigation task
-│   └── quadcopter.py             # Prompts for quadcopter task
+│   ├── quadcopter.py             # Prompts for quadcopter task
+│   └── experimental.py           # Scratch prompt for testing prompt variants
 ├── reward_generator/
 │   ├── __init__.py
 │   ├── cli.py                    # CLI entry point (argparse)
@@ -33,6 +34,7 @@ llm-reward-pipeline/
 │   ├── hf_client.py              # HuggingFace Transformers client (with LoRA)
 │   ├── orchestrator.py           # Main generation loop + validation pipeline
 │   ├── prompt_builder.py         # Dynamic prompt construction with feedback
+│   ├── prompt_loader.py          # Load prompt lists from .py/.json/text files
 │   └── reward_store.py           # Save accepted/rejected candidates to disk
 ├── validators/
 │   ├── __init__.py
@@ -224,8 +226,10 @@ tests/test_pipeline.py::test_extract_validate_runtime PASSED
 | `--adapter-path` | No | LoRA adapter path (GGUF `.bin` or HF adapter ID) |
 | `--client-type` | No | `local` (llama.cpp) or `hf` (Transformers). Auto-detected if not specified |
 | `--num-candidates` | No | Number of reward functions to generate (default: config value) |
-| `--feedback` | No | Enable full feedback block in prompts (previous code, metrics, improvement directives) |
+| `--feedback` | No | Enable the feedback loop: distill runtime failures from previous candidates into a token-free "failure scorecard" injected into the prompt |
 | `--task` | No | Task name: `long_range_navigation` or `quadcopter` |
+| `--prompt-style` | No | Prompt template style: `detailed` (per-domain/task prompt) or `experimental` (scratch prompt in `prompts/experimental.py`). Defaults to config value |
+| `--prompts-file` | No | Path to a file with a list of prompts to run inference on (`.py` module exposing `TEST_PROMPTS`, `.json` array, or text file). When set, each candidate uses one prompt from the list |
 | `--config` | No | Path to YAML config (default: `configs/default.yaml`) |
 | `--clean` | No | Delete all previous outputs before running |
 
@@ -333,6 +337,65 @@ python -m reward_generator.cli \
   --clean \
   --task quadcopter
 ```
+
+### Prompt Styles
+
+The pipeline supports multiple prompt templates, selected via `--prompt-style` (or `prompt_style` in the YAML `pipeline` section):
+
+- **`detailed`** (default) — the full per-domain prompt with tensor reference, few-shot example, and strict coding constraints (`prompts/quadcopter.py`, `prompts/uav_navigation.py`).
+- **`experimental`** — a bare scratch prompt from `prompts/experimental.py`. Edit that file to test out different prompts and inferences — no code changes required. By default the prompt is sent as-is; pass `--feedback` to append the failure scorecard.
+
+### How feedback works
+
+Feedback has two channels, both derived from the previous candidates in the run. Both are **token-free by design**: the model is never told the name of an attribute it hallucinated, because repeating a plausible-but-wrong token back into the prompt anchors the model and makes it repeat the mistake (this measurably dropped acceptance when attribute names were fed back verbatim).
+
+- **Channel A — failure scorecard (into the system prompt, `--feedback` only).** Runtime-test failures are tallied into error *categories* — `missing_attr`, `dim_out_of_range`, `shape_mismatch`, `invalid_output`, `output_shape`, `other_runtime` — each rendered as one sentence with a count (e.g. "attempts referenced a `self.*` attribute that does NOT exist in the sandbox (seen 2×)"). The patch then positively states the exact attribute surface the sandbox exposes (auto-derived from `validators/runtime_tester.py`), so the model knows what it *may* use instead of what it must not. Only candidates that reached the runtime smoke test and failed contribute.
+- **Channel B — prior results window (into the user prompt, always rendered).** The last 4 candidates fill the `{prior_results}` placeholder of the domain template: accepted candidates show a 6-line code preview (a known-good structural template); rejected candidates show their reason plus a sanitized one-line *category label* — raw error messages are stripped of quoted tokens and dummy class names (`_Data`, `_DummyEnv`).
+
+**Experimental style (`--prompt-style experimental`):**
+
+```bash
+# bare test prompt (user message only, exactly as written in prompts/experimental.py)
+python -m reward_generator.cli \
+  --config configs/quadcopter.yaml \
+  --model-path models/qwen2.5-coder-7b-instruct-q4_k_m.gguf \
+  --num-candidates 5 \
+  --task quadcopter \
+  --prompt-style experimental
+
+# with the feedback loop enabled
+python -m reward_generator.cli \
+  --config configs/quadcopter.yaml \
+  --model-path models/qwen2.5-coder-7b-instruct-q4_k_m.gguf \
+  --num-candidates 5 \
+  --task quadcopter \
+  --prompt-style experimental \
+  --feedback
+```
+
+> The selected `prompt_style` is recorded in each candidate's metadata/log output.
+
+### Running Inference on a List of Prompts
+
+To run inference on an external list of prompts (e.g. a 1,000-prompt test set), point the pipeline at the file with `--prompts-file`. Each candidate then uses one prompt from the list verbatim (as a user-only message); if `--num-candidates` exceeds the list length, the list wraps around.
+
+Supported file formats:
+
+- **`.py`** — a Python module exposing `TEST_PROMPTS` (or `PROMPTS` / `PROMPT_LIST`), a list of strings. Multi-line prompts supported.
+- **`.json`** — a JSON array of strings. Multi-line prompts supported.
+- **any other** — plain text, one prompt per non-empty line.
+
+```bash
+# Run one inference per prompt over a 1,000-prompt test set
+python -m reward_generator.cli \
+  --config configs/quadcopter.yaml \
+  --model-path models/qwen2.5-coder-7b-instruct-q4_k_m.gguf \
+  --num-candidates 1000 \
+  --task quadcopter \
+  --prompts-file /path/to/test_prompts.py
+```
+
+Each candidate's metadata/log records `prompt_index` and the full `prompt` text, so you can trace which prompt produced which reward function. Feedback is not applied in this mode — every prompt is sent exactly as written.
 
 Results are saved to:
 - `outputs/rewards/` — accepted reward `.py` files + `.json` metadata

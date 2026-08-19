@@ -19,6 +19,8 @@ class PipelineConfig:
     save_all_raw: bool
     random_seed: int
     feedback: bool = False
+    prompt_style: str = "detailed"
+    prompts_file: str | None = None
 
 
 @dataclass

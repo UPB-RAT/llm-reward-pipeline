@@ -21,8 +21,25 @@ def parse_args():
     )
     parser.add_argument("--num-candidates", type=int, default=None)
     parser.add_argument("--feedback",       action="store_true", default=None,
-                        help="Enable full feedback block in prompts (previous code, metrics, improvement directives).")
+                        help="Enable the feedback loop: distill previous runtime failures into a token-free failure scorecard injected into the prompt.")
     parser.add_argument("--task",           dest="task_name", default=None)
+    parser.add_argument(
+        "--prompt-style",
+        dest="prompt_style",
+        choices=["detailed", "experimental"],
+        default=None,
+        help="Prompt template style: 'detailed' (per-domain/task prompt) or "
+             "'experimental' (scratch prompt in prompts/experimental.py). "
+             "Defaults to config value.",
+    )
+    parser.add_argument(
+        "--prompts-file",
+        dest="prompts_file",
+        default=None,
+        help="Path to a file with a list of prompts to run inference on "
+             "(.py module exposing TEST_PROMPTS, .json array, or text file). "
+             "When set, each candidate uses one prompt from the list.",
+    )
     parser.add_argument(
         "--clean",
         action="store_true",
@@ -51,6 +68,10 @@ def main():
         config.pipeline.task_name = args.task_name
     if args.feedback is not None:
         config.pipeline.feedback = args.feedback
+    if args.prompt_style is not None:
+        config.pipeline.prompt_style = args.prompt_style
+    if args.prompts_file is not None:
+        config.pipeline.prompts_file = args.prompts_file
 
     if args.clean:
         print("\n── Cleaning previous outputs ──")

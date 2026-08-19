@@ -1,4 +1,5 @@
 from reward_generator.prompt_builder import build_messages
+from reward_generator.prompt_loader import load_prompts
 from validators.code_extractor import extract_code_block
 from validators.ast_validator import static_validate
 from validators.diversity_checker import diversity_check
@@ -12,6 +13,11 @@ class RewardGenerationOrchestrator:
         self.llm = llm_client
         self.config = config
         self.store = RewardStore("outputs/rewards", "outputs/logs")
+        self.prompts = None
+        prompts_file = getattr(self.config.pipeline, "prompts_file", None)
+        if prompts_file:
+            self.prompts = load_prompts(prompts_file)
+            print(f"Loaded {len(self.prompts)} prompts from {prompts_file}")
 
     def run(self):
         accepted = []
@@ -20,10 +26,17 @@ class RewardGenerationOrchestrator:
         for idx in range(self.config.pipeline.num_candidates):
 
             # --- Build prompt using ALL prior results (accepted + rejected) ---
+            prompt_override = None
+            prompt_index = None
+            if self.prompts:
+                prompt_index = idx % len(self.prompts)
+                prompt_override = self.prompts[prompt_index]
+
             messages = build_messages(
                 config=self.config,
                 prior_results=all_results,
                 feedback=self.config.pipeline.feedback,
+                prompt_override=prompt_override,
             )
 
             # --- LLM inference ---
@@ -44,6 +57,9 @@ class RewardGenerationOrchestrator:
             record = {
                 "candidate_index": idx,
                 "temperature_used": temperature,
+                "prompt_style": getattr(self.config.pipeline, "prompt_style", "detailed"),
+                "prompt_index": prompt_index,
+                "prompt": prompt_override,
                 "raw_output": raw_output,
                 "code": None,
             }

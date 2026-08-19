@@ -16,6 +16,7 @@ pipeline:
   save_all_raw: false
   random_seed: 42
   feedback: false
+  prompt_style: detailed          # detailed (per-domain prompt) or experimental (prompts/experimental.py)
 
 runtime_test:
   batch_size: 16

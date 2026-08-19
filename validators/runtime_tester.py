@@ -1,5 +1,22 @@
 import torch
 
+# Attributes the smoke-test sandbox exposes. The feedback loop uses this list as
+# POSITIVE grounding (what the reward function may rely on) instead of teaching
+# the model hallucinated names. Keep in sync with _build_dummy_env below.
+ALLOWED_ATTRIBUTE_SURFACE = [
+    "self._robot.data.root_pos_w",
+    "self._robot.data.root_lin_vel_b",
+    "self._robot.data.root_ang_vel_b",
+    "self._robot.data.projected_gravity_b",
+    "self._desired_pos_w",
+    "self.step_dt",
+]
+
+
+def allowed_attributes() -> list[str]:
+    """Attributes the smoke-test sandbox actually exposes to the reward function."""
+    return list(ALLOWED_ATTRIBUTE_SURFACE)
+
 
 def runtime_test(code: str, batch_size: int = 16, max_episode_len: int = 500) -> tuple[bool, str, dict]:
     torch.manual_seed(42)
@@ -107,7 +124,18 @@ def _build_dummy_env(N: int, max_episode_len: int):
             self.step_dt        = 0.02
             self.episode_length_buf = torch.randint(0, max_episode_len, (N,))
 
-    return _DummyEnv()
+    env = _DummyEnv()
+    _verify_attribute_surface(env)
+    return env
+
+
+def _verify_attribute_surface(env) -> None:
+    """Fail loudly if the declared sandbox surface drifts from the dummy env."""
+    for path in ALLOWED_ATTRIBUTE_SURFACE:
+        parts = path.split(".")[1:]  # drop "self"
+        obj = env
+        for part in parts:
+            obj = getattr(obj, part)
 
 
 def _validate_output(reward, N: int) -> tuple[bool, str, dict]:
