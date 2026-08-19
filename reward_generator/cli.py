@@ -15,9 +15,9 @@ def parse_args():
     parser.add_argument("--adapter-path",   default=None, help="Path/ID of the LoRA adapter (GGUF or HF).")
     parser.add_argument(
         "--client-type",
-        choices=["local", "hf"],
+        choices=["local", "vllm"],
         default=None,
-        help="LLM client backend: 'local' (llama.cpp) or 'hf' (Transformers). Auto-detected if not specified.",
+        help="LLM client backend: 'local' (llama.cpp) or 'vllm' (vLLM). Auto-detected if not specified.",
     )
     parser.add_argument("--num-candidates", type=int, default=None)
     parser.add_argument("--feedback",       action="store_true", default=None,
@@ -79,7 +79,7 @@ def main():
 
     client_type = args.client_type
     if client_type is None:
-        client_type = "local" if args.model_path.endswith(".gguf") or Path(args.model_path).is_file() else "hf"
+        client_type = "local" if args.model_path.endswith(".gguf") or Path(args.model_path).is_file() else "vllm"
 
     if client_type == "local":
         llm = LocalLLMClient(

@@ -14,6 +14,7 @@ dependencies:
       - torchaudio
       - huggingface-hub
       - pytest
+      - vllm
       - transformers
       - peft
       - accelerate

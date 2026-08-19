@@ -224,7 +224,7 @@ tests/test_pipeline.py::test_extract_validate_runtime PASSED
 |---|---|---|
 | `--model-path` | Yes | GGUF file path or HuggingFace model ID |
 | `--adapter-path` | No | LoRA adapter path (GGUF `.bin` or HF adapter ID) |
-| `--client-type` | No | `local` (llama.cpp) or `hf` (Transformers). Auto-detected if not specified |
+| `--client-type` | No | `local` (llama.cpp) or `vllm` (vLLM). Auto-detected if not specified |
 | `--num-candidates` | No | Number of reward functions to generate (default: config value) |
 | `--feedback` | No | Enable the feedback loop: distill runtime failures from previous candidates into a token-free "failure scorecard" injected into the prompt |
 | `--task` | No | Task name: `long_range_navigation` or `quadcopter` |
@@ -268,9 +268,9 @@ python -m reward_generator.cli \
   --task quadcopter
 ```
 
-### Option B — HuggingFace Transformers Model (Base & Fine-tuned)
+### Option B — vLLM (HuggingFace Models)
 
-You can run base or fine-tuned model adapters directly from HuggingFace using the `HFLLMClient`. The backend client type is auto-detected as `hf` if `--model-path` is not a `.gguf` file.
+You can run base or fine-tuned model adapters directly from HuggingFace using vLLM as the inference backend (`HFLLMClient`). The backend client type is auto-detected as `vllm` if `--model-path` is not a `.gguf` file.
 
 **UAV Navigation task (`long_range_navigation`):**
 
