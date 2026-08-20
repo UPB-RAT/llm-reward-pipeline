@@ -28,6 +28,8 @@ class HFLLMClient:
         llm_kwargs = dict(
             model=self.base_model_path,
             trust_remote_code=True,
+            enforce_eager=True,
+            gpu_memory_utilization=0.65,
         )
 
         if self.adapter_path:

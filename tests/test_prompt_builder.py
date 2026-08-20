@@ -149,6 +149,52 @@ def test_prompt_override_uses_exact_text():
     assert messages[0]["content"] == "Custom test prompt text."
 
 
+def test_prompt_override_with_feedback_injects_patch():
+    config = _make_config(prompt_style="detailed", feedback=True)
+    prior = [
+        {
+            "candidate_index": 0,
+            "status": "rejected",
+            "reason": "runtime_test_failed",
+            "stage": "runtime_tester",
+            "code": "def _get_rewards(self):\n    pass",
+            "runtime_test": {"ok": False, "message": "Shape mismatch — expected (16,), got (16, 3)"},
+        }
+    ]
+    messages = build_messages(
+        config,
+        prior_results=prior,
+        feedback=True,
+        prompt_override="Custom prompt from file.",
+    )
+    assert len(messages) == 1
+    assert messages[0]["role"] == "user"
+    assert "Custom prompt from file." in messages[0]["content"]
+    assert "PREVIOUS ATTEMPTS FAILED" in messages[0]["content"]
+    assert "every component must be [N]" in messages[0]["content"]
+
+
+def test_prompt_override_without_feedback_no_patch():
+    config = _make_config(prompt_style="detailed", feedback=False)
+    prior = [
+        {
+            "candidate_index": 0,
+            "status": "rejected",
+            "reason": "runtime_test_failed",
+            "runtime_test": {"ok": False, "message": "Dimension out of range"},
+        }
+    ]
+    messages = build_messages(
+        config,
+        prior_results=prior,
+        feedback=False,
+        prompt_override="Custom prompt from file.",
+    )
+    assert len(messages) == 1
+    assert messages[0]["content"] == "Custom prompt from file."
+    assert "PREVIOUS ATTEMPTS FAILED" not in messages[0]["content"]
+
+
 def test_failure_patch_skips_early_stage_rejections():
     results = [
         {"status": "rejected", "reason": "no_code_block", "stage": "code_extractor"},
